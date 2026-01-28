@@ -45,8 +45,8 @@ Ikuti langkah-langkah ini perlahan untuk pemula:
 Buka terminal (Command Prompt atau PowerShell) dan ketik perintah ini:
 
 ```bash
-git clone https://github.com/sipaldrop/sipal-zugchain-bot.git
-cd sipal-zugchain-bot
+git clone https://github.com/sipaldrop/ZugchainBot-Sipal
+cd ZugchainBot-Sipal
 ```
 
 ### 2. Install Aplikasi Pendukung
