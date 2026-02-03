@@ -323,8 +323,16 @@ class ZugChainClient {
 
         this.log(`Solving Captcha...`, chalk.white);
 
+        // Add Proxy Support for 2Captcha
+        let proxyParams = '';
+        if (this.proxy) {
+            const cleanProxy = this.proxy.replace(/^https?:\/\//, '').replace(/^socks[45]:\/\//, '');
+            const proxyType = this.proxy.startsWith('socks') ? 'SOCKS5' : 'HTTP';
+            proxyParams = `&proxy=${cleanProxy}&proxytype=${proxyType}`;
+        }
+
         // 1. Send Request
-        const resIn = await axios.get(`http://2captcha.com/in.php?key=${twoCaptchaApiKey}&method=userrecaptcha&googlekey=${siteKey}&pageurl=${url}&json=1`);
+        const resIn = await axios.get(`http://2captcha.com/in.php?key=${twoCaptchaApiKey}&method=userrecaptcha&googlekey=${siteKey}&pageurl=${url}&json=1${proxyParams}`);
 
         if (resIn.data.status !== 1) {
             throw new Error(`2Captcha Error: ${resIn.data.request}`);
@@ -378,14 +386,16 @@ class ZugChainClient {
     }
 
     async stakeZUG(missions = [], amount = '1') {
-        const STAKING_CONTRACT = '0x4ed9828ba8487b9160C820C8b72c573E74eBbD0A';
+        // Updated staking contract from HAR file analysis (February 2026)
+        const STAKING_CONTRACT = '0xa5BD672f12501a16FFe31408316fe09dC63c09F2';
         try {
             // stake(uint256 poolId, uint256 amount) - selector 0xc9c11fa9
-            // poolId = 0, amount = 0 (amount is sent as msg.value)
-            // Based on HAR: input was 0xc9c11fa9 + 2x 32-byte zeros (poolId=0, amount=0)
+            // Pool ID seems to be 2 based on other calls in HAR
+            // Amount param is 0, actual value sent via msg.value
+            const poolId = 2;
             const stakeData = '0xc9c11fa9' +
-                '0000000000000000000000000000000000000000000000000000000000000000' + // poolId = 0
-                '0000000000000000000000000000000000000000000000000000000000000000';  // amount = 0 (value is used)
+                poolId.toString(16).padStart(64, '0') + // poolId = 2
+                '0000000000000000000000000000000000000000000000000000000000000000'; // amount = 0
 
             this.log(`Staking ${amount} ZUG...`, chalk.white);
 
@@ -1033,20 +1043,18 @@ class ZugChainBot {
         this.isRunning = true;
 
         while (this.isRunning) {
-            // Check setiap menit
-            await sleep(60 * 1000);
+            const nextRuns = this.schedulers.map(s => s.nextRunTime);
+            const soonest = Math.min(...nextRuns);
+            const now = Date.now();
 
-            // Cek apakah ada scheduler yang perlu dijalankan
-            const needsRun = this.schedulers.some(s => Date.now() >= s.nextRunTime);
-
-            if (needsRun) {
+            if (now >= soonest) {
+                // Clear the countdown line
+                process.stdout.write('\r' + ' '.repeat(60) + '\r');
                 await this.runCycle();
             } else {
-                // Show next run time
-                const nextRuns = this.schedulers.map(s => s.nextRunTime);
-                const soonest = Math.min(...nextRuns);
-                const waitTime = Math.max(0, soonest - Date.now());
-                console.log(chalk.grey(`[~] Next check in ${formatTimeLeft(waitTime / 1000)}`));
+                const waitTime = Math.max(0, soonest - now);
+                process.stdout.write(`\r${chalk.grey(`[~] Next check in ${formatTimeLeft(Math.ceil(waitTime / 1000))}   `)}`);
+                await sleep(1000);
             }
         }
     }

@@ -1,7 +1,7 @@
 {
   "baseUrl": "https://testnet.zugchain.org",
   "rpcUrl": "https://rpc.zugchain.org",
-  "chainId": 43521,
+  "chainId": 824642,
   "api": {
     "missions": "/api/missions",
     "verify": "/api/missions/verify",
@@ -34,6 +34,6 @@
   "dummyPages": [
     "/",
     "/leaderboard",
-    "/staking"
+    "/staking/vzug"
   ]
 }
