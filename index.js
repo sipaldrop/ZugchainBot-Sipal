@@ -289,6 +289,12 @@ class ZugChainClient {
                 return this.request(method, endpoint, data, retries + 1);
             }
 
+            // Don't retry captcha-related 400 errors - the token is single-use
+            if (status === 400 && (errMsg === 'CAPTCHA_REQUIRED' || errMsg === 'INVALID_CAPTCHA' || errMsg === 'CAPTCHA_EXPIRED')) {
+                this.log(`Captcha error (${errMsg}), not retrying - token is single-use`, chalk.red);
+                throw error;
+            }
+
             if (retries < config.retry.maxRetries) {
                 const backoff = Math.min(
                     config.retry.initialBackoffMs * Math.pow(2, retries),
@@ -321,7 +327,7 @@ class ZugChainClient {
             throw new Error('2Captcha API Key not found in accounts.json');
         }
 
-        this.log(`Solving Captcha...`, chalk.white);
+        this.log(`Solving Captcha (reCAPTCHA)...`, chalk.white);
 
         // Add Proxy Support for 2Captcha
         let proxyParams = '';
@@ -359,6 +365,51 @@ class ZugChainClient {
         }
 
         throw new Error('Captcha Timeout');
+    }
+
+    async solveTurnstile(siteKey, url) {
+        if (!twoCaptchaApiKey) {
+            throw new Error('2Captcha API Key not found in accounts.json');
+        }
+
+        this.log(`Solving Captcha (Cloudflare Turnstile)...`, chalk.white);
+
+        // Add Proxy Support for 2Captcha
+        let proxyParams = '';
+        if (this.proxy) {
+            const cleanProxy = this.proxy.replace(/^https?:\/\//, '').replace(/^socks[45]:\/\//, '');
+            const proxyType = this.proxy.startsWith('socks') ? 'SOCKS5' : 'HTTP';
+            proxyParams = `&proxy=${cleanProxy}&proxytype=${proxyType}`;
+        }
+
+        // 1. Send Turnstile captcha request to 2Captcha
+        const resIn = await axios.get(`http://2captcha.com/in.php?key=${twoCaptchaApiKey}&method=turnstile&sitekey=${siteKey}&pageurl=${url}&json=1${proxyParams}`);
+
+        if (resIn.data.status !== 1) {
+            throw new Error(`2Captcha Turnstile Error: ${resIn.data.request}`);
+        }
+
+        const requestId = resIn.data.request;
+
+        // 2. Poll for Result
+        let attempts = 0;
+        while (attempts < 30) {
+            await sleep(5000);
+            const resOut = await axios.get(`http://2captcha.com/res.php?key=${twoCaptchaApiKey}&action=get&id=${requestId}&json=1`);
+
+            if (resOut.data.status === 1) {
+                this.log(`Turnstile Captcha Solved!`, chalk.green);
+                return resOut.data.request;
+            }
+
+            if (resOut.data.request !== 'CAPCHA_NOT_READY') {
+                throw new Error(`2Captcha Turnstile Failed: ${resOut.data.request}`);
+            }
+
+            attempts++;
+        }
+
+        throw new Error('Turnstile Captcha Timeout');
     }
 
     async getProfile() {
@@ -515,24 +566,23 @@ class ZugChainClient {
         try {
             this.log(`Claiming Faucet...`, chalk.white);
 
-            // Site Key for ReCaptcha v2 on ZugChain (extracted from HAR/Page)
-            const SITE_KEY = '6Lerk04sAAAAAJqTuhkaScWwo6LaUPI1ogZXwYo0';
+            // Cloudflare Turnstile site key for ZugChain faucet (updated Feb 2026)
+            const TURNSTILE_SITE_KEY = '0x4AAAAAABm2A8ILpRMAq4AQ';
             const FAUCET_PAGE = `${config.baseUrl}/faucet`;
 
-            // Solve captcha
-            const captchaToken = await this.solveCaptcha(SITE_KEY, FAUCET_PAGE);
+            // Solve Cloudflare Turnstile captcha
+            const captchaToken = await this.solveTurnstile(TURNSTILE_SITE_KEY, FAUCET_PAGE);
 
             // STEP 1: Call the actual faucet API to get tokens
-            // Correct API payload: {address, recaptchaToken, referralCode}
             this.log(`Requesting tokens from faucet...`, chalk.white);
 
             // Get referral code from config if available
             const referralCode = config.referralCode || '';
 
-            // The correct payload format from faucet page JS
+            // The correct payload format from faucet page JS (uses turnstileToken)
             const faucetPayload = {
-                address: this.address.toLowerCase(),
-                recaptchaToken: captchaToken,
+                address: this.address,
+                turnstileToken: captchaToken,
                 referralCode: referralCode
             };
 
@@ -596,7 +646,7 @@ class ZugChainClient {
 
             const verifyPayloads = [
                 { address: this.address, taskId },
-                { address: this.address, taskId, captchaToken: captchaToken },
+                { address: this.address, taskId, turnstileToken: captchaToken },
                 { address: this.address.toLowerCase(), taskId }
             ];
 
@@ -840,7 +890,7 @@ class AccountScheduler {
             if (stakingMissionId && !stakingDone) {
                 try {
                     this.log(`Daily Staking...`, chalk.white);
-                    const stakeRes = await this.client.stakeZUG(missions);
+                    const stakeRes = await this.client.stakeZUG(missions, '9');
                     if (stakeRes) {
                         stakingDone = true;
                         this.log(`Staking Status: SUCCESS`, chalk.green);
